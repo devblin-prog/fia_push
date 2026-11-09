@@ -1,0 +1,40 @@
+name: Import PU FIA
+on:
+  schedule:
+    - cron: '0 7,11,17 * * 5,6,0,1'
+  workflow_dispatch:
+    inputs:
+      dry:
+        description: 'Dry-run (1 = ne rien écrire)'
+        default: ''
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Installer poppler
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils
+
+      - name: Récupérer le PDF, extraire, envoyer
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DRY: ${{ github.event.inputs.dry }}
+        run: |
+          set -euo pipefail
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+          PAGE_URL="https://www.fia.com/documents/championships/fia-formula-one-world-championship-14/season/season-2026-2072"
+
+          curl -fsSL -A "$UA" "$PAGE_URL" -o page.html
+          C="[^\"'<>\s]*"
+          PATH_PDF=$(grep -oiP "/(system|sites/default)/files/decision-document/${C}pu${C}elements${C}used${C}per${C}driver${C}\.pdf" page.html | head -1 || true)
+          if [ -z "$PATH_PDF" ]; then echo "Aucun document PU trouvé (pas encore publié ?)"; exit 0; fi
+
+          echo "Document : https://www.fia.com$PATH_PDF"
+          curl -fsSL -A "$UA" "https://www.fia.com$PATH_PDF" -o pu.pdf
+          pdftotext -layout pu.pdf pu.txt
+
+          curl -fsS -X POST "$SITE_URL/cron_pu_fia_push.php" \
+            --data-urlencode "secret=$CRON_SECRET" \
+            --data-urlencode "dry=$DRY" \
+            --data-urlencode "text@pu.txt"
